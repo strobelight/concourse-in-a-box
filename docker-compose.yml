@@ -8,6 +8,9 @@ version: '3'
 #   configuration DRYer. See for example
 #   https://docs.ansible.com/ansible/latest/user_guide/playbooks_advanced_syntax.html
 
+volumes:
+  worker-state:
+    driver: local
 
 services:
   minio:
@@ -35,8 +38,8 @@ services:
     entrypoint: /scripts/minio-setup.sh
 
   vault:
-    image: vault:1.7.1
-    command: server -dev
+    image: &vault_image hashicorp/vault:1.13.12
+    entrypoint: vault server -dev-root-token-id="$VAULT_DEV_ROOT_TOKEN_ID" -dev-listen-address="${VAULT_DEV_LISTEN_ADDRESS:-"0.0.0.0:8200"}" -dev
     ports:
     - 8200:8200
     environment:
@@ -46,7 +49,7 @@ services:
 
   # This container will stop as soon as the script has run.
   vault-setup:
-    image: vault:1.7.1
+    image: *vault_image
     depends_on:
     - vault
     volumes:
@@ -72,13 +75,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
   web:
-    image: &concourse-image concourse/concourse:7.8.2
+    image: &concourse-image concourse/concourse:6.7.6
     command: web
     depends_on:
     - db
     - minio-setup
     - vault-setup
-    ports: [8080:8080]
+    ports: [8081:8080]
     volumes:
     - "./concourse-keys:/concourse-keys"
     environment:
@@ -92,7 +95,7 @@ services:
       CONCOURSE_POSTGRES_USER: *postgres-user
       CONCOURSE_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       CONCOURSE_POSTGRES_DATABASE: *postgres-db
-      CONCOURSE_EXTERNAL_URL: http://localhost:8080
+      CONCOURSE_EXTERNAL_URL: http://localhost:8081
       CONCOURSE_ADD_LOCAL_USER: ${CONCOURSE_MAIN_USER}:${CONCOURSE_MAIN_PASSWORD},${CONCOURSE_NORMAL_USER}:${CONCOURSE_NORMAL_PASSWORD},${CONCOURSE_READONLY_USER}:${CONCOURSE_READONLY_PASSWORD}
       CONCOURSE_MAIN_TEAM_LOCAL_USER: ${CONCOURSE_MAIN_USER}
       CONCOURSE_CLUSTER_NAME: dev
@@ -113,7 +116,7 @@ services:
     volumes:
       - "./scripts:/scripts"
     environment:
-      CONCOURSE_ADDR: web:8080
+      CONCOURSE_ADDR: web:8081
 
     entrypoint: /scripts/concourse-setup.sh
 
@@ -121,16 +124,33 @@ services:
     image: *concourse-image
     command: worker
     privileged: true
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    user: root
     depends_on: [web]
+    restart: always
     ports:
     - 7777:7777
     - 7788:7788
     volumes:
-    - "./concourse-keys:/concourse-keys"
+      - "./concourse-keys:/concourse-keys"
+      - worker-state:/worker-state
     stop_signal: SIGUSR2
     environment:
+      # if using containerd as runtime
       CONCOURSE_RUNTIME: containerd
+      CONCOURSE_CONTAINERD_LOG_LEVEL: error
+      # work with docker-compose's dns
+      CONCOURSE_CONTAINERD_DNS_PROXY_ENABLE: "true"
+
+      # if using guardian as runtime
+      #CONCOURSE_RUNTIME: guardian
+      #CONCOURSE_GARDEN_LOG_LEVEL: error
+
       CONCOURSE_NAME: worker-1
+
+      CONCOURSE_WORK_DIR: /worker-state
 
       CONCOURSE_TSA_PUBLIC_KEY: /concourse-keys/tsa_host_key.pub
       CONCOURSE_TSA_WORKER_PRIVATE_KEY: /concourse-keys/worker_key
@@ -139,12 +159,9 @@ services:
       CONCOURSE_TSA_HOST: web:2222
 
       CONCOURSE_BAGGAGECLAIM_LOG_LEVEL: error
-      CONCOURSE_CONTAINERD_LOG_LEVEL: error
       CONCOURSE_BIND_IP: 0.0.0.0
       CONCOURSE_BAGGAGECLAIM_BIND_IP: 0.0.0.0
 
       # avoid using loopbacks
       CONCOURSE_BAGGAGECLAIM_DRIVER: overlay
 
-      # work with docker-compose's dns
-      CONCOURSE_CONTAINERD_DNS_PROXY_ENABLE: "true"
