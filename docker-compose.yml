@@ -165,3 +165,31 @@ services:
       # avoid using loopbacks
       CONCOURSE_BAGGAGECLAIM_DRIVER: overlay
 
+  registry:
+    hostname: index.docker.io
+    container_name: index.docker.io
+    command: |
+      /bin/sh -c "\
+        cp /etc/ssl/registry.key /etc/ssl/private/registry.key \
+        chmod 400 /etc/ssl/private/registry.key \
+        chown root:root /etc/ssl/private/registry.key \
+        cp /etc/ssl/registry.crt /etc/ssl/certs/registry.crt \
+        chmod 644 /etc/ssl/certs/registry.crt \
+        chown root:root /etc/ssl/certs/registry.crt \
+        registry serve /etc/docker/registry/config.yml \
+      "
+
+    image: registry
+    volumes:
+      - "$HOME/Docker-Storage:/var/lib/registry"
+      - "$HOME/Docker-Storage/concourse_registry_config.yml:/etc/docker/registry/config.yml"
+      - "$HOME/Docker-Storage/registry.key:/etc/ssl/registry.key"
+      - "$HOME/Docker-Storage/registry.crt:/etc/ssl/registry.crt"
+
+  utils:
+    image: arunvelsriram/utils
+    hostname: utils
+    container_name: utils
+    entrypoint: sleep 4h
+    privileged: true
+    user: root
